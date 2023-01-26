@@ -171,6 +171,82 @@ df %>%
   group_by(race) %>%
   dplyr::summarize(frequency=n(), mean=mean(earnhourly))
 
+#### GRAPHS ####
+# Hourly earnings
+ggplot(data = df, aes(earnhourly)) + 
+  geom_histogram(bins = 20, fill = 'navyblue', col = 'white', size = 0.25, alpha = 0.8) + 
+  theme_bw() + 
+  labs(title = "Hourly earning distribution of surgeons and physicians", x = "Hourly earnings in USD", y = "frequency") +
+  theme(plot.title = element_text(size = rel(1))) + 
+  scale_x_continuous(expand = c(0.01,0.01))
+
+# Hourly earnings
+ggplot(data = df, aes(x = earnhourly)) + 
+  geom_histogram(
+    aes(y = (..count..)/sum(..count..)),
+    bins = 20, fill = 'navyblue', col = 'white', size = 0.25, alpha = 0.8) + 
+  theme_bw() + 
+  labs(
+    title = "Hourly earning distribution of surgeons and physicians", 
+    x = "ln price in USD", y = "percent of total"
+  ) +
+  scale_y_continuous(
+    expand = c(0.01,0.01),
+    labels = scales::percent_format(accuracy = 0.1)
+  ) +
+  theme(plot.title = element_text(size = rel(1))) +
+  scale_x_continuous(expand = c(0.01,0.01))
+
+# Check the loess of their hourly earnings based on age
+ggplot(data = df, aes(x=age, y=earnhourly)) +
+  geom_point( color = "#330099", size = 1,  shape = 16, alpha = 0.8, show.legend=F, na.rm = TRUE) + 
+  geom_smooth(method="loess", se=F, colour="#000000", size=1, span=0.9, formula = 'y ~ x') +
+  labs(x = "Age (years)",y = "Hourly earnings (US dollars)", title = ' Age and hourly earnings, loess method') +
+  theme_bw()
+# Check with lspline at the age of 42
+spline_regression <- lm(earnhourly ~ lspline(age, 42), data = df)
+df$splinepredict <- predict(spline_regression)
+
+ggplot(df, aes(x = age, y = earnhourly)) + 
+  geom_point( color = "#330099", size = 1,  shape = 16, alpha = 0.8, show.legend=F, na.rm = TRUE) + 
+  theme_bw() + 
+  labs(title = "Age and hourly earnings, spline regression", x = "Age (years)", y = "Hourly earnings (US dollars)") +
+  theme(plot.title = element_text(size = rel(1))) + 
+  geom_line(data = df, aes(x = age, y = splinepredict), size = 1)
+
+gp1 <- ggplot(df, aes(x = factor(ownchild), y =earnhourly, fill = factor(ownchild))) +
+  geom_boxplot( color = '#000000', alpha = 0.8) +
+  stat_summary(fun.y = 'mean',geom = "point", fill='white', shape = 21, size = 4) +
+  labs(title ='Hourly wage based on children', x = '', y = 'Hourly earnings (US dollars)') +
+  scale_x_discrete(labels = c('Without children','With children')) +
+  theme_bw() +
+  guides(fill=FALSE) +
+  theme(axis.text.x = element_text(size = 6))
+
+
+gp2 <- ggplot(df, aes(x = factor(grade92), y =earnhourly, fill = factor(grade92))) +
+  geom_boxplot( color = '#000000', alpha = 0.8) +
+  stat_summary(fun.y = 'mean',geom = "point", fill='white', shape = 21, size = 4) +
+  labs(title ='Hourly wage based on schooling', x = '', y = 'Hourly earnings (US dollars)') +
+  scale_x_discrete(labels = c('Bachelors degree','Masters degree', 'Professional school degree', 'Doctorate degree')) +
+  theme_bw() +
+  theme(legend.position = 'none') +
+  theme(axis.text.x = element_text(size = 6))
+
+
+gp3 <- ggplot(df, aes(x = factor(married), y =earnhourly, fill = factor(married))) +
+  geom_boxplot( color = '#000000', alpha = 0.8) +
+  stat_summary(fun.y = 'mean',geom = "point", fill='white', shape = 21, size = 4) +
+  labs(title ='Hourly wage based on marital status', x = '', y = 'Hourly earnings (US dollars)') +
+  scale_x_discrete(labels = c('Single',"Married")) +
+  theme_bw() +
+  theme(legend.position = 'none') +
+  theme(axis.text.x = element_text(size = 6))
+
+
+ggarrange(gp1, gp2, gp3,
+          hjust = 1,
+          ncol = 3, nrow = 1)
 
 
 

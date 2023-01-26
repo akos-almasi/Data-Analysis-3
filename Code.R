@@ -248,6 +248,88 @@ ggarrange(gp1, gp2, gp3,
           hjust = 1,
           ncol = 3, nrow = 1)
 
+### Models ###
+
+model1 <- as.formula(earnhourly ~ age + agesq)
+model2 <- as.formula(earnhourly ~ age + agesq + married)
+model3 <- as.formula(earnhourly ~ age + agesq + married + ownchild + as.factor(grade92))
+model4 <- as.formula(earnhourly ~ age + agesq + married*age + ownchild + as.factor(grade92) + 
+                       sex + priv_profit + 
+                       priv_nonprofit + gov_state + 
+                       gov_local + gov_fed)     
+reg1 <- lm(model1, data=df)
+reg2 <- lm(model2, data=df)
+reg3 <- lm(model3, data=df)
+reg4 <- lm(model4, data=df)
+
+
+summary(reg3, vcov = 'sandwich')
+
+# evaluation of the models
+models <- c("reg1", "reg2","reg3", "reg4")
+AIC <- c()
+BIC <- c()
+RMSE <- c()
+RSquared <- c()
+regr <- c()
+k <- c()
+
+for ( i in 1:length(models)){
+  AIC[i] <- AIC(get(models[i]))
+  BIC[i] <- BIC(get(models[i]))
+  RMSE[i] <- RMSE(predict(get(models[i])), get(models[i])$model$earnhourly)
+  RSquared[i] <-summary(get(models[i]))$r.squared
+  regr[[i]] <- coeftest(get(models[i]), vcov = sandwich)
+  k[i] <- get(models[i])$rank -1
+}
+
+# All models
+eval <- data.frame(models, k, RSquared, RMSE, BIC)
+
+# gsub(pattern, replacement, x) 
+eval <- eval %>%
+  mutate(models = paste0("(",gsub("reg","",models),")")) %>%
+  rename(Model = models, "R-squared" = RSquared, "Training RMSE" = RMSE, "N predictors" = k)
+
+
+
+#################################################################
+# Cross-validation
+
+# set number of folds
+k <- 4
+
+set.seed(13505)
+cv1 <- train(model1, df, method = "lm", trControl = trainControl(method = "cv", number = k))
+set.seed(13505)
+cv2 <- train(model2, df, method = "lm", trControl = trainControl(method = "cv", number = k))
+set.seed(13505)
+cv3 <- train(model3, df, method = "lm", trControl = trainControl(method = "cv", number = k), na.action = "na.omit")
+set.seed(13505)
+cv4 <- train(model4, df, method = "lm", trControl = trainControl(method = "cv", number = k), na.action = "na.omit")
+
+# calculate average RMSE
+cv <- c("cv1", "cv2", "cv3", "cv4")
+rmse_cv <- c()
+
+for(i in 1:length(cv)){
+  rmse_cv[i] <- sqrt((get(cv[i])$resample[[1]][1]^2 +
+                        get(cv[i])$resample[[1]][2]^2 +
+                        get(cv[i])$resample[[1]][3]^2 +
+                        get(cv[i])$resample[[1]][4]^2)/4)
+}
+
+
+# summarize results
+cv_mat <- data.frame(rbind(cv1$resample[4], "Average"),
+                     rbind(cv1$resample[1], rmse_cv[1]),
+                     rbind(cv2$resample[1], rmse_cv[2]),
+                     rbind(cv3$resample[1], rmse_cv[3]),
+                     rbind(cv4$resample[1], rmse_cv[4])
+)
+
+colnames(cv_mat)<-c("Resample","Model1", "Model2", "Model3", "Model4")
+cv_mat
 
 
 

@@ -97,3 +97,81 @@ ggcorrplot(cor(df %>% select_if(is.numeric)), type = 'lower',lab = TRUE, lab_siz
 df %>%
   dplyr::select(age, grade92, ownchild, marital, uhours, sex, race,earnhourly ) %>%
   summary()
+################################################################################
+# DATA GENERATION & DESCRIPTIVES
+
+# Create new column based on marital column, takes 1 if married 0 if not 
+df <- df %>% 
+  mutate(married = ifelse(marital < 4, 1, 0))
+
+# Modify ownchild column, takes 1 if have a child 0 if not
+df <- df %>%
+  mutate(ownchild = ifelse(ownchild >= 1, 1,0))
+
+# Create ln hourly earnings column
+df$lnearnhourly <- log(df$earnhourly)
+
+# Create age squared column
+df$agesq <- df$age^2
+
+# Create new columns based on the class column
+df <- df %>%
+  mutate(priv_profit = ifelse(class == "Private, For Profit", 1,0),
+         priv_nonprofit = ifelse(class == "Private, Nonprofit", 1,0),
+         gov_state = ifelse(class == "Government - State", 1,0),
+         gov_local = ifelse(class == "Government - Local", 1,0),
+         gov_fed = ifelse(class == "Government - Federal", 1,0))
+
+# Summary statistics based on hourly earning in each class
+df %>% 
+  group_by(class) %>% 
+  summarise(
+    frequency=n(),
+    min = min(earnhourly),
+    P1 = quantile(earnhourly, 0.01), 
+    D1 = quantile(earnhourly, 0.1), 
+    Q1 = quantile(earnhourly, 0.25), 
+    Me = quantile(earnhourly, 0.5), 
+    Q3 = quantile(earnhourly, 0.75), 
+    D9 = quantile(earnhourly, 0.9), 
+    P99 = quantile(earnhourly, 0.99),
+    max = max(earnhourly),
+    mean = mean(earnhourly))
+
+# Summary statistics based on hourly earning in each education level
+df %>% 
+  group_by(grade92) %>% 
+  summarise(
+    frequency=n(),
+    min = min(earnhourly),
+    P1 = quantile(earnhourly, 0.01), 
+    D1 = quantile(earnhourly, 0.1), 
+    Q1 = quantile(earnhourly, 0.25), 
+    Me = quantile(earnhourly, 0.5), 
+    Q3 = quantile(earnhourly, 0.75), 
+    D9 = quantile(earnhourly, 0.9), 
+    P99 = quantile(earnhourly, 0.99),
+    max = max(earnhourly),
+    mean = mean(earnhourly))
+
+
+
+# Check how much they earn in each sex, 1 = Male, 2 = Female
+df %>%
+  group_by(sex) %>%
+  dplyr::summarize(frequency=n(), mean=mean(earnhourly))
+
+# Check how much they earn hourly on average based on if they have a child or not: 1 = yes, 0 = no
+df %>%
+  group_by(ownchild) %>%
+  dplyr::summarize(frequency=n(), mean=mean(earnhourly))
+
+# Check how much they earn hourly on average based on the race
+df %>%
+  group_by(race) %>%
+  dplyr::summarize(frequency=n(), mean=mean(earnhourly))
+
+
+
+
+

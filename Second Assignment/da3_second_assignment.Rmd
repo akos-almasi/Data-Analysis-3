@@ -1,0 +1,759 @@
+---
+title: "DA3_second_assignment"
+author: "Akos Almasi"
+date: "2023-02-09"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r,message=FALSE, warning=FALSE}
+# CLEAR MEMORY
+rm(list=ls())
+# Libraries used
+library(tidyverse)
+library(modelsummary)
+library(ranger)
+library(caret)
+library(pdp)
+library(gbm)
+library(rattle)
+library(tables)
+```
+
+## Data import
+```{r}
+area <- "Vienna"
+data <- read.csv('https://raw.githubusercontent.com/akos-almasi/Data-Analysis-3/main/Second%20Assignment/listings.csv')
+
+```
+
+## Data exploration
+```{r}
+# Check the data
+glimpse(data)
+
+# Descriptive statistics
+skimr::skim(data)
+
+unique(data$property_type)
+datasummary(property_type ~ Percent(), data = data, output = 'markdown')
+
+Hmisc::describe(data$price)
+```
+
+## Data cleaning process
+```{r}
+# Focus on apartments 
+data <- data %>% filter(room_type == 'Entire home/apt')
+
+# Hosting 2-6 accommodates
+data <- data %>% filter(accommodates >= 2 & accommodates <= 6)
+
+# Change price column to numeric, remove dollar sign 
+data$price <- as.numeric(as.character(gsub('\\$', '', data$price)))
+# Change NA values to 0 in price column
+data$price[is.na(data$price)] <- 0
+# Filter prices that are 0
+data <- data %>% filter(!price == 0)
+
+# different type of property types
+unique(data$property_type)
+# Check how frequent each property type
+datasummary(property_type ~ N + Percent(), data = data, output = 'markdown')
+
+# Keep only the following property types: 
+data <- data %>%
+  filter(property_type %in% c('Entire condo', 'Entire loft', 'Entire home', 'Entire rental unit', 'Entire serviced apartment'))
+
+# Extreme value
+P01 <- function(x){quantile(x, 0.01)}
+P99 <- function(x){quantile(x, 0.99)}
+datasummary( price~ P0 + P01 + P25 + P50 + P75 +  P99 + P100 + Mean + SD,  
+             data = data , output = 'markdown')
+# Drop the unrealistically high values in price 
+data <- data %>% filter(!price >= 380.42)
+# Drop the unrealistically low values in price 
+data <- data %>% filter(!price <= 27.00)
+
+### BATHROOMS TEXT COLUMN ###
+# remove bath from each element
+data$bathrooms_text <- gsub(" bath","",data$bathrooms_text)
+# remove s from each element
+data$bathrooms_text <- gsub("s","",data$bathrooms_text)
+# change 'Half-bath' to '0.5'
+data$bathrooms_text <- gsub("Half-bath","0.5",data$bathrooms_text)
+# Convert it to numeric create a new column called bathrooms
+data$bathrooms <- as.numeric(data$bathrooms_text)
+# Replace missing values with the most frequent value
+frequent_value_bathrooms <- names(sort(table(data$bathrooms), decreasing = TRUE))[1]
+data$bathrooms[is.na(data$bathrooms)] <- frequent_value_bathrooms
+# Filter out the ones we have only 1 observation on
+data <- data %>% filter(!bathrooms == 3.5)
+data <- data %>% filter(!bathrooms == 4.5)
+
+### BINARY COLUMNS ###
+# Change t to 1 change f to 0 in binary columns
+for (binary in c("host_is_superhost","host_has_profile_pic","host_identity_verified","has_availability","instant_bookable")){
+  data[[binary]][data[[binary]]=="f"] <- 0
+  data[[binary]][data[[binary]]=="t"] <- 1
+}
+
+### NEIGHBOURHOOD_CLEANSED COLUMN ###
+# Change it to factor type
+data$neighbourhood_cleansed <- as.factor(data$neighbourhood_cleansed)
+
+### PROPERTY_TYPE COLUMN ###
+# Change it to factor type
+data$property_type <- as.factor(data$property_type)
+
+###create days since first review ###
+data <- data %>%
+  mutate(days_since_review = as.numeric(as.Date(calendar_last_scraped,format="%Y-%m-%d") -
+                                     as.Date(first_review ,format="%Y-%m-%d")))
+
+sum(is.na(data$days_since_review))
+### BEDS COLUMN ###
+# Replace missing values with the most frequent value
+frequent_value_beds <- names(sort(table(data$beds), decreasing = TRUE))[1]
+data$beds[is.na(data$beds)] <- frequent_value_beds
+# 
+data <- data %>% filter (!beds == 7)
+
+```
+
+## Data creation from amenities column
+
+The amenities column contains a lot of important information, decided to further investigate this column. Created different binary columns for each aminities that can be found in the dataset and summarized the most important them for each airbnb apartment. The following informations were considered important: tv, wifi, dishwasher, air conditioning, pool, free parking, paid parking, gym, heating, carbomonoxid alarm, smokealarm, elevator, indoor fireplace, shampoo, firstaid, oven, refrigerator, balcony, soundsystem, ironing, lockbox, securitycameras.
+```{r}
+############################ AMENITIES ##################################
+# Clean amenities column
+data$amenities<-gsub("\\{","",data$amenities)
+data$amenities<-gsub("\\}","",data$amenities)
+data$amenities<-gsub('\\"',"",data$amenities)
+
+data$amenities<-as.list(strsplit(data$amenities, ","))
+x <- levels(factor(unlist(data$amenities)))
+data<-cbind(data,as.data.frame(do.call(rbind, lapply(lapply(data$amenities, factor, x), table))))
+
+### TV ###
+# Every column that contains TV in their name
+d_tv_cols <- grep("tv", tolower(names(data)), fixed = TRUE)
+# Create d_TV dummy variable, combine any of the columns that has 'tv' in their name and add it to data 
+data <- data %>% mutate(d_TV = ifelse(rowSums(.[d_tv_cols]) > 0, 1, 0))
+
+### WIFI ###
+# Every column that contains wifi in their name
+d_wifi_cols <- grep("wifi", tolower(names(data)), fixed = TRUE)
+# Create d_wifi dummy variable, combine any of the columns that has 'wifi' in their name and add it to data
+data <- data %>% mutate(d_wifi = ifelse(rowSums(.[d_wifi_cols]) > 0, 1, 0))
+
+### DISH WASHER ###
+# Every column that contains dishwasher in their name
+d_dishwasher_cols <- grep("dishwasher", tolower(names(data)), fixed = TRUE)
+# Create d_dishw dummy variable, combine any of the columns that has 'dishwasher' in their name and add it to data
+data <- data %>% mutate(d_dishwash = ifelse(rowSums(.[d_dishwasher_cols]) > 0, 1, 0))
+
+### AIR CONDITIONING ###
+d_airconditioning_cols <- grep('air condition', tolower(names(data)), fixed = TRUE)
+# Create d_airconditioning dummy variable, combine any of the columns that has 'air condition' in their name and add it to data
+data <- data %>% mutate(d_airconditioning = ifelse(rowSums(.[d_airconditioning_cols]) > 0, 1, 0))
+
+### POOL ###
+# Remove whirlpool from each column name
+colnames(data) <- gsub("whirlpool", "", colnames(data), ignore.case = TRUE)
+# columns that contain pool
+d_pool_cols <- grep('pool', tolower(names(data)), fixed = TRUE)
+# Create d_pool dummy variable, combine any of the columns that has 'air condition' in their name and add it to data
+data <- data %>% mutate(d_pool = ifelse(rowSums(.[d_pool_cols]) > 0, 1, 0))
+
+### FREE PARKING ###
+# columns that contain free parking
+d_freeparking_cols <- grep('free parking', tolower(names(data)), fixed = TRUE)
+# Create d_freeparking dummy variable, combine any of the columns that has 'free parking' in their name and add it to data
+data <- data %>% mutate(d_freeparking = ifelse(rowSums(.[d_freeparking_cols]) > 0, 1, 0))
+
+### PAID PARKING ###
+# columns that contain paid parking
+d_paidparking_cols <- grep('paid parking', tolower(names(data)), fixed = TRUE)
+# Create d_paidparking dummy variable, combine any of the columns that has 'paid parking' in their name and add it to data
+data <- data %>% mutate(d_paidparking = ifelse(rowSums(.[d_paidparking_cols]) > 0, 1, 0))
+
+### GYM ###
+# columns that contain gym
+d_gym_cols <- grep('gym', tolower(names(data)), fixed = TRUE)
+# Create d_gym dummy variable, combine any of the columns that has 'gym' in their name and add it to data
+data <- data %>% mutate(d_gym = ifelse(rowSums(.[d_gym_cols]) > 0, 1, 0))
+
+### HEATING ###
+d_heating_cols <- grep('heating', tolower(names(data)), fixed = TRUE)
+# Create d_heating dummy variable, combine any of the columns that has 'heating' in their name and add it to data
+data <- data %>% mutate(d_heating = ifelse(rowSums(.[d_heating_cols]) > 0, 1, 0))
+
+### CARBONMONOXID ###
+d_carbonmonoxid_cols <- grep('monoxid', tolower(names(data)), fixed = TRUE)
+# Create d_monoxid dummy variable, combine any of the columns that has 'monoxid' in their name and add it to data
+data <- data %>% mutate(d_monoxid = ifelse(rowSums(.[d_carbonmonoxid_cols]) > 0, 1, 0))
+
+### SMOKEALARM ###
+d_smokealarm_cols <- grep('smoke', tolower(names(data)), fixed = TRUE)
+# Create d_smokealarm dummy variable, combine any of the columns that has 'smoke' in their name and add it to data
+data <- data %>% mutate(d_smokealarm = ifelse(rowSums(.[d_smokealarm_cols]) > 0, 1, 0))
+
+### ELEVATOR ###
+d_elevator_cols <- grep('elevator', tolower(names(data)), fixed = TRUE)
+# Create d_elevator dummy variable, combine any of the columns that has 'elevator' in their name and add it to data
+data <- data %>% mutate(d_elevator = ifelse(rowSums(.[d_elevator_cols]) > 0, 1, 0))
+
+### INDOOR FIREPLACE ###
+d_indoorfireplace_cols <- grep('indoor fireplace', tolower(names(data)), fixed = TRUE)
+# Create d_indoorfireplace dummy variable, combine any of the columns that has 'indoor fireplace' in their name and add it to data
+data <- data %>% mutate(d_indoorfireplace = ifelse(rowSums(.[d_indoorfireplace_cols]) > 0, 1, 0))
+
+### SHAMPOO ###
+d_shampoo_cols <- grep('shampoo', tolower(names(data)), fixed = TRUE)
+# Create d_shampoo dummy variable, combine any of the columns that has 'shampoo' in their name and add it to data
+data <- data %>% mutate(d_shampoo = ifelse(rowSums(.[d_shampoo_cols]) > 0, 1, 0))
+
+### FIRST AID ###
+d_firstaid_cols <- grep('first aid', tolower(names(data)), fixed = TRUE)
+# Create d_firstaid dummy variable, combine any of the columns that has 'first aid' in their name and add it to data
+data <- data %>% mutate(d_firstaid = ifelse(rowSums(.[d_firstaid_cols]) > 0, 1, 0))
+
+### OVEN ###
+d_oven_cols <- grep('oven', tolower(names(data)), fixed = TRUE)
+# Create d_oven dummy variable, combine any of the columns that has 'first aid' in their name and add it to data
+data <- data %>% mutate(d_oven = ifelse(rowSums(.[d_oven_cols]) > 0, 1, 0))
+
+### REFRIGERATOR ###
+d_refrigerator_cols <- grep('refrigerator', tolower(names(data)), fixed = TRUE)
+# Create d_refrigerator dummy variable, combine any of the columns that has 'refrigerator' in their name and add it to data
+data <- data %>% mutate(d_refrigerator = ifelse(rowSums(.[d_refrigerator_cols]) > 0, 1, 0))
+
+### BALCONY ###
+d_balcony_cols <- grep('balcony', tolower(names(data)), fixed = TRUE)
+# Create d_balcony dummy variable, combine any of the columns that has 'balcony' in their name and add it to data
+data <- data %>% mutate(d_balcony = ifelse(rowSums(.[d_balcony_cols]) > 0, 1, 0))
+
+### SOUND SYSTEM ###
+d_soundsystem_cols <- grep('sound system', tolower(names(data)), fixed = TRUE)
+# Create d_soundsystem dummy variable, combine any of the columns that has 'sound system' in their name and add it to data
+data <- data %>% mutate(d_soundsystem = ifelse(rowSums(.[d_soundsystem_cols]) > 0, 1, 0))
+
+### IRON ###
+d_iron_cols <- grep('iron', tolower(names(data)), fixed = TRUE)
+# Create d_iron dummy variable, combine any of the columns that has 'iron' in their name and add it to data
+data <- data %>% mutate(d_iron = ifelse(rowSums(.[d_iron_cols]) > 0, 1, 0))
+
+### LOCK BOX ###
+d_lockbox_cols <- grep('lockbox', tolower(names(data)), fixed = TRUE)
+# Create d_lockbox dummy variable, combine any of the columns that has 'lockbox' in their name and add it to data
+data <- data %>% mutate(d_lockbox = ifelse(rowSums(.[d_lockbox_cols]) > 0, 1, 0))
+
+#### SECURITY ####
+d_securitycameras_cols <- grep('security', tolower(names(data)), fixed = TRUE)
+data <- data %>% mutate(d_securitycameras = ifelse(rowSums(.[d_securitycameras_cols]) > 0, 1, 0))
+
+## Remove the columns that I generated from the amenities column
+data <- data[, !(names(data) %in% x)]
+```
+## Data creation from description column
+
+I realized that many people write the size of the apartment in this column, I wanted to check if I could find this information for most of the apartments. Unfortunately, this was not the case, some write in square feet instead of square meters, and some rows are missing this information completely. Overall it might be worth investigating this further, in my opinion it would be an important information for price forecasting. 
+```{r, warning=FALSE}
+### DESCRIPTION COLUMN ###
+# Find the square meter of apartments in the description column 
+data$description1 <- gsub("^.*?([0-9]+).*?(sqm|m2|m²|m ²|square meter|squaremeter).*$", "\\1", 
+                          data$description)
+
+data$description1 <- as.numeric(data$description1)
+sum(is.na(data$description1))
+```
+## Drop unnecessary columns
+```{r}
+data <- data %>% select(-c('name','source','description','scrape_id',"listing_url", "last_scraped",
+                           "listing_url", "picture_url", "host_id", "host_url",
+                           'host_name','host_location','host_thumbnail_url', 
+                           'host_picture_url', 'host_neighbourhood', 'host_about',"   (IKEA) refrigerator",
+                           "  induction stove","  oven","   refrigerator", "  stainless steel oven", 
+                           "last_review","first_review", "calendar_last_scraped", 
+                           "calendar_updated", "calendar_last_scraped",'host_since',
+                           'neighborhood_overview','neighbourhood', 'neighbourhood_group_cleansed',
+                           'host_verifications','bathrooms_text', " Philipps   refrigerator", 'license', 
+                           "  electric stove","  stainless steel gas stove", 'amenities'))
+
+```
+
+
+## Create train and holdout samples
+```{r}
+# set seed
+set.seed(20230201)
+
+train_indices <- as.integer(createDataPartition(data$price, p = 0.7, list = FALSE))
+data_train <- data[train_indices, ]
+data_holdout <- data[-train_indices, ]
+
+# Check the number of observations in each
+dim(data_train)
+dim(data_holdout)
+```
+
+## Define models
+```{r}
+# Basic Variables incl. neighbourhood
+basic_vars <- c(
+  "accommodates", "beds","minimum_nights","bathrooms","maximum_nights",
+  "property_type","neighbourhood_cleansed")
+
+# reviews
+reviews <- c("number_of_reviews")
+
+# dummy variables
+amenities <-  grep("^d_.*", names(data), value = TRUE)
+ 
+# interactions for the LASSO
+X1  <- c("accommodates*property_type","d_airconditioning*property_type", "maximum_nights*property_type", 'minimum_nights*property_type')
+# with boroughs
+X2  <- c("property_type*neighbourhood_cleansed", "accommodates*neighbourhood_cleansed")
+
+predictors_2 <- c(basic_vars, reviews, amenities)
+predictors_E <- c(basic_vars, reviews, amenities, X1,X2)
+
+# do 5-fold CV
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              verboseIter = FALSE)
+
+```
+
+## Random Forest model
+```{r}
+### set tuning ###
+tune_grid <- expand.grid(
+  # the number of predictors randomly sampled as candidates at each split. The value of 8 means that 
+  # 8 predictors will be randomly sampled as candidates at each split.
+  .mtry = c(8,10,12),
+  # the rule for splitting the nodes in the decision tree. The value of "variance" means that the split is based on
+  # the variance of the target variable.
+  .splitrule = "variance",
+  # the minimum size of the terminal nodes, or the minimum number of observations required in a terminal node. 
+  # The value of 50 means that a terminal node must have at least 50 observations.
+  .min.node.size = c(15,25,35)
+)
+
+### Random forest model ###
+set.seed(1234)
+system.time({
+  rf_model <- train(
+    formula(paste0("price ~", paste0(predictors_2, collapse = " + "))),
+    data = data_train,
+    method = "ranger",
+    trControl = train_control,
+    tuneGrid = tune_grid,
+    importance = "impurity"
+  )
+})
+
+rf_model
+
+# DIAGNOSTICS 
+
+# Variable Importance Plots 
+
+# first need a function to calculate grouped varimp
+group.importance <- function(rf.obj, groups) {
+  var.imp <- as.matrix(sapply(groups, function(g) {
+    sum(importance(rf.obj)[g], na.rm = TRUE)
+  }))
+  colnames(var.imp) <- "MeanDecreaseGini"
+  return(var.imp)
+}
+
+
+rf_model_var_imp <- ranger::importance(rf_model$finalModel)/1000
+rf_model_var_imp_df <-
+  data.frame(varname = names(rf_model_var_imp),imp = rf_model_var_imp) %>%
+  mutate(varname = gsub("f_neighbourhood_cleansed", "Borough:", varname) ) %>%
+  mutate(varname = gsub("f_room_type", "Room type:", varname) ) %>%
+  arrange(desc(imp)) %>%
+  mutate(imp_percentage = imp/sum(imp))
+
+rf_model_var_imp_df
+
+# full varimp plot, top 10 only
+ggplot(
+    rf_model_var_imp_df[1:10,], 
+    aes(x=reorder(varname, imp), y=imp_percentage)) +
+  geom_point(color='skyblue', size=3) +
+  geom_segment(
+    aes(x=varname,xend=varname,y=0,yend=imp_percentage), 
+    color='skyblue', size=1) +
+  ylab("Importance (Percent)") +
+  xlab("Variable Name") +
+  labs(title = 'Top 10 variables in RF model') + 
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_bw()
+
+# Partial dependence plots
+# 1) number of accomodates
+pdp_n_acc_rf <- pdp::partial(rf_model, 
+                          pred.var = "accommodates", 
+                          pred.grid = distinct_(data_holdout, "accommodates"), 
+                          train = data_train)
+
+pdp_n_acc_rf %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=2) +
+  geom_line(color='skyblue', size=1) +
+  ylab("Predicted price") +
+  xlab("Accommodates (persons)") +
+  labs(title = 'Partial dependence plot for number of accomodates (RF)') + 
+  theme_bw()
+
+# 2) property-type
+pdp_n_property_rf <- pdp::partial(rf_model, 
+                          pred.var = "property_type", 
+                          pred.grid = distinct_(data_holdout, "property_type"), 
+                          train = data_train)
+
+pdp_n_property_rf %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=3) +
+  ylab("Predicted price") +
+  xlab("Property type") +
+  labs(title = 'Partial dependence plot for property type (RF)') + 
+  theme_bw()
+
+```
+
+## Gradient Boosting Model
+```{r, warning=FALSE}
+# set tuning
+gbm_grid <-  expand.grid(interaction.depth = c(1, 5, 10), 
+                          n.trees = (4:10)*50, 
+                          shrinkage = 0.1, 
+                          n.minobsinnode = 20)
+                         
+# The model         
+set.seed(1234)
+system.time({
+  gbm_model <- train(formula(paste0("price ~", paste0(predictors_2, collapse = " + "))),
+                     data = data_train,
+                     method = "gbm",
+                     trControl = train_control,
+                     verbose = FALSE,
+                     tuneGrid = gbm_grid)
+})
+
+gbm_model
+gbm_model$finalModel
+
+# Partial dependence plots
+# 1) number of accomodates
+pdp_n_acc_gbm <- pdp::partial(gbm_model, 
+                          pred.var = "accommodates", 
+                          pred.grid = distinct_(data_holdout, "accommodates"), 
+                          train = data_train)
+
+pdp_n_acc_gbm %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=2) +
+  geom_line(color='skyblue', size=1) +
+  ylab("Predicted price") +
+  xlab("Accommodates (persons)") +
+  labs(title = 'Partial dependence plot for number of accomodates (GBM)') + 
+  theme_bw()
+
+# 2) property-type
+pdp_n_property_gbm <- pdp::partial(gbm_model, 
+                          pred.var = "property_type", 
+                          pred.grid = distinct_(data_holdout, "property_type"), 
+                          train = data_train)
+
+pdp_n_property_gbm %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=3) +
+  ylab("Predicted price") +
+  xlab("Property type") +
+  labs(title = 'Partial dependence plot for property type (GBM)') + 
+  theme_bw()
+
+```
+
+## OLS model
+
+```{r, warning=FALSE}
+set.seed(1234)
+system.time({
+  ols_model <- train(
+    formula(paste0("price ~", paste0(predictors_2, collapse = " + "))),
+    data = data_train,
+    method = "lm",
+    trControl = train_control
+  )
+})
+
+ols_model_coeffs <-  ols_model$finalModel$coefficients
+ols_model_coeffs_df <- data.frame(
+  "variable" = names(ols_model_coeffs),
+  "ols_coefficient" = ols_model_coeffs
+) %>%
+  mutate(variable = gsub("`","",variable))
+
+# Partial dependence plots
+# 1) number of accomodates
+pdp_n_acc_ols <- pdp::partial(ols_model, 
+                          pred.var = "accommodates", 
+                          pred.grid = distinct_(data_holdout, "accommodates"), 
+                          train = data_train)
+
+pdp_n_acc_ols %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=2) +
+  geom_line(color='skyblue', size=1) +
+  ylab("Predicted price") +
+  xlab("Accommodates (persons)") +
+  labs(title = 'Partial dependence plot for number of accomodates (OLS)') + 
+  theme_bw()
+
+# 2) property-type
+pdp_n_property_ols <- pdp::partial(ols_model, 
+                          pred.var = "property_type", 
+                          pred.grid = distinct_(data_holdout, "property_type"), 
+                          train = data_train)
+
+pdp_n_property_ols %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=3) +
+  ylab("Predicted price") +
+  xlab("Property type") +
+  labs(title = 'Partial dependence plot for property type (OLS)') + 
+  theme_bw()
+
+ols_model
+```
+
+## Lasso model
+
+```{r, warning=FALSE}
+set.seed(1234)
+system.time({
+  lasso_model <- train(
+    formula(paste0("price ~", paste0(predictors_E, collapse = " + "))),
+    data = data_train,
+    method = "glmnet",
+    preProcess = c("center", "scale"),
+    tuneGrid =  expand.grid(
+      "alpha" = 1, 
+      "lambda" = seq(0.01, 0.25, by = 0.01)),
+    trControl = train_control
+  )
+})
+
+lasso_model
+
+# Coefficients
+lasso_coeffs <- coef(
+  lasso_model$finalModel,
+  lasso_model$bestTune$lambda) %>%
+  as.matrix() %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "variable") %>%
+  rename(lasso_coefficient = `s1`)
+
+# Coefficients that are not 0
+lasso_coeffs_non_null <- lasso_coeffs[!lasso_coeffs$lasso_coefficient == 0,]
+# Regression coefficients including: OLS model, Lasso model
+regression_coeffs <- merge(ols_model_coeffs_df, lasso_coeffs_non_null, by = "variable", all=TRUE)
+
+
+
+
+# Partial dependence plots
+# 1) number of accomodates
+pdp_n_acc_lasso <- pdp::partial(lasso_model, 
+                          pred.var = "accommodates", 
+                          pred.grid = distinct_(data_holdout, "accommodates"), 
+                          train = data_train)
+
+pdp_n_acc_lasso %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=2) +
+  geom_line(color='skyblue', size=1) +
+  ylab("Predicted price") +
+  xlab("Accommodates (persons)") +
+  labs(title = 'Partial dependence plot for number of accomodates (Lasso)') + 
+  theme_bw()
+
+# 2) property-type
+pdp_n_property_lasso <- pdp::partial(lasso_model, 
+                          pred.var = "property_type", 
+                          pred.grid = distinct_(data_holdout, "property_type"), 
+                          train = data_train)
+
+pdp_n_property_lasso %>%
+  autoplot( ) +
+  geom_point(color='skyblue', size=3) +
+  ylab("Predicted price") +
+  xlab("Property type") +
+  labs(title = 'Partial dependence plot for property type (Lasso)') + 
+  theme_bw()
+
+```
+
+## Summary of the models
+
+```{r}
+# The final models all together
+final_models <-
+  list("OLS" = ols_model,
+       "LASSO (model w/ interactions)" = lasso_model,
+       "Random forest model" = rf_model,
+       "GBM"  = gbm_model)
+
+
+results <- resamples(final_models) %>% summary()
+
+
+# Cross validated RMSE
+df_CV_RMSE <- imap(
+  final_models, 
+  ~{mean(results$values[[paste0(.y,"~RMSE")]])}
+) %>% 
+  unlist() %>% 
+  as.data.frame() %>%
+  rename("CV RMSE" = ".")
+
+
+# RMSE on the holdout data
+df_holdout_RMSE <- map(
+  final_models, 
+  ~{RMSE(
+    predict(.x, newdata = data_holdout), 
+    data_holdout[["price"]]
+  )}
+) %>% 
+  unlist() %>% 
+  as.data.frame() %>%
+  rename("Holdout RMSE" = ".")
+# Create a key column to merge the 2 tables
+df_CV_RMSE$models <- rownames(df_CV_RMSE)
+df_holdout_RMSE$models <- rownames(df_holdout_RMSE)
+# Merge the two tables
+merged_RMSE <- merge(df_CV_RMSE, df_holdout_RMSE, by = 'models')
+merged_RMSE
+```
+
+
+## Compare actual vs predicted on the holdout data
+
+```{r}
+# Predict on the holdout data
+data_holdout$gbm_price <- predict(gbm_model, data_holdout)
+data_holdout$rf_price <- predict(rf_model, data_holdout)
+
+# Set colors for RF and GBM model model
+colors <- c('GBM'='#990033', 'RF'= 'navyblue')
+
+# Visualize the result
+ggplot( 
+  data_holdout, aes(x = price)   ) +
+  geom_point( 
+    aes(y = gbm_price, color = 'GBM' ), 
+    size = 2 ) +
+  geom_point( 
+    aes(y = rf_price, color = 'RF' ), 
+    size = 2 ) +
+  geom_abline( 
+    intercept = 0, 
+    slope = 1, 
+    size = 1, 
+    linetype = 'dashed'
+  ) +
+  scale_color_manual(breaks = c('GBM', 'RF'), values = colors) + 
+  xlim(-1,max(data_holdout$price))+
+  ylim(-1,max(data_holdout$price))+
+  labs(
+    x='Actual price (US$)',
+    y='Predicted price (US$)', 
+    color = 'Models',
+    title = "Predicted vs actual price - GBM & RF")+
+  theme_bw() +
+  theme(legend.position = 'left')
+
+
+```
+
+
+
+
+### Extra graphs for report
+
+```{r}
+# Airbnb price distribution
+ggplot(data = data, aes(x = price)) + 
+  geom_histogram(
+    aes(y = (..count..)/sum(..count..)),
+    bins = 30, fill = 'skyblue4', col = 'white', size = 0.25, alpha = 0.8) + 
+  theme_bw() + 
+  labs(
+    title = "The distribution of airbnb apartment prices", 
+    x = "Price (US dollar)", y = "percent of total"
+  ) +
+  scale_y_continuous(
+    expand = c(0.01,0.01),
+    labels = scales::percent_format(accuracy = 0.1)
+  ) +
+  theme(plot.title = element_text(size = rel(1))) +
+  scale_x_continuous(expand = c(0.01,0.01))
+
+
+# What kind of prices to expect on average for each property type, how many observations we have on each of them
+data %>%   
+  ggplot() +
+  geom_jitter(aes(x = as.factor(property_type), y = price), width = 0.25, color = "skyblue4", size = 1)+
+  geom_crossbar(data = data %>% group_by(property_type) %>% dplyr::summarize( avg = mean(price)), aes(x = as.factor(property_type), y = avg, ymin = avg, ymax = avg), size=0.5,col="orangered1", width = 0.55) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0,400) , 
+                     breaks = seq(0, 400, by=50)) +
+  labs(y ='Price in USD',x = 'Property type') +
+  ggtitle(paste0('Information on the price based on the property type'))
+
+
+
+# Variable importance plot for the best performing model RF
+rf_model_var_imp <- ranger::importance(rf_model$finalModel)/1000
+rf_model_var_imp_df <-
+  data.frame(varname = names(rf_model_var_imp),imp = rf_model_var_imp) %>%
+  mutate(varname = gsub("f_neighbourhood_cleansed", "Borough:", varname) ) %>%
+  mutate(varname = gsub("f_room_type", "Room type:", varname) ) %>%
+  arrange(desc(imp)) %>%
+  mutate(imp_percentage = imp/sum(imp))
+
+rf_model_var_imp_df
+
+# full varimp plot, top 10 only
+ggplot(
+    rf_model_var_imp_df[1:10,], 
+    aes(x=reorder(varname, imp), y=imp_percentage)) +
+  geom_point(color='skyblue4', size=3) +
+  geom_segment(
+    aes(x=varname,xend=varname,y=0,yend=imp_percentage), 
+    color='skyblue4', size=1) +
+  ylab("Importance (Percent)") +
+  xlab("Variable Name") +
+  labs(title = 'Variable importance plot for RF model') + 
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0,0.15)) +
+  scale_x_discrete(labels = c('1 bathroom', '3 beds', '2 bathrooms', 'minimum nights', 'maximum nights', 'TV', 'air conditioning', 'number of reviews', 'Innere Stadt district', 'number of accomodates')) +
+  theme_bw()
+
+
+```
+
+
+
+
+
